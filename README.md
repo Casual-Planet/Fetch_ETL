@@ -91,6 +91,26 @@ You should see a JSON response representing a message from the queue, something 
 }
 
 ```
+### Verify to check if the Postgres table is empty 
+
+```
+psql -d postgres -U postgres -p 5432 -h localhost -W
+```
+After entering the password  (postgres), run the following SQL command:
+
+```
+SELECT * FROM user_logins;
+```
+You should see the records of the user_logins table, something like this:
+
+```
+ user_id | device_type | masked_ip | masked_device_id | locale | app_version | create_date 
+---------+-------------+-----------+------------------+--------+-------------+-------------
+(0 rows)
+
+
+```
+#### To exit the PostgreSQL prompt, type ```\q``` and press enter.
 
 ## Running the Application
 The main application script is located in the `src` directory and named `main.py`. The `main.py` script is designed to process data from an Amazon Simple Queue Service (SQS) queue, apply transformations, and store it in a PostgreSQL database. The script performs data masking to protect sensitive information before storing it in the database.
@@ -141,28 +161,6 @@ You should see the records of the user_logins table, something like this:
 To ensure the integrity and functionality of the ETL process, we have included a suite of unit tests. Even though they weren't explicitly part of the original assessment, implementing these tests provides a safety net and helps ensure the application's robustness as we move forward with further development and improvements.
 
 
-Navigate to the project's root directory by:
-    
-``` 
-   cd /path/to/your/Fetch_ETL
-   ```
-   
-Use the nosetests command followed by the directory containing the tests. In our case, this directory is named tests.
-
-```
-nosetests tests
-
-```
-You should expect an output similar to:
-
-```
-----------------------------------------------------------------------
-Ran 5 tests in 0.231s
-
-OK
-```
-This indicates that all 5 tests passed successfully. If there are any issues or failed tests, they will be highlighted in the output.
-
 
 
 ### Stopping Containers:
@@ -174,49 +172,32 @@ docker-compose down
 
 
 ## Design Decisions
-
-
 #### How will you read messages from the queue?
-
-- The boto3 client, a well-documented and efficient AWS SDK for Python, is utilized to read messages from the AWS SQS Queue. To guarantee data integrity and avoid redundant processing, we follow a sequential approach. After the successful processing and storage of a message in the database, we ensure its removal from the queue to prevent reprocessing.
+- To interact with AWS SQS, we utilize the boto3 client in our sqs_client.py script. Messages are read in batches of up to 10, as specified by the MaxNumberOfMessages parameter in the get_messages_from_queue function. This ensures efficient processing while reducing the number of API calls. The sequence we follow ensures that a message is processed and inserted into the database successfully before it's deleted from the queue, which avoids potential data loss or redundant processing.
 #### What type of data structures should be used?
-
-- For managing the JSON data from the SQS messages, Python dictionaries have been chosen. Their key-value pair nature aligns perfectly with the structure of JSON data. Dictionaries offer simple, direct, and efficient methods to access, transform, and manipulate JSON-like structures.
+- The system uses Python dictionaries to manage JSON data fetched from the SQS messages, as seen in functions such as mask_data and flatten_json in the data_processing.py script. Dictionaries were chosen due to their inherent alignment with JSON data structures and the ease of manipulating key-value pairs.
 #### How will you mask the PII data so that duplicate values can be identified?
-
-- To ensure the confidentiality of PII (Personally Identifiable Information), we use Fernet symmetric encryption from the cryptography library. This method masks the ip and device_id fields, making the original data unreadable. However, one of the critical properties we maintain with this encryption method is consistency. This means that for a given input, the encrypted output will always be the same. This deterministic behavior ensures that even after masking, we can identify records with duplicate values.
-
-- For instance, if two users have the same device_id, after encryption, their masked device_id fields will also be identical, enabling us to detect such duplicates.
-
-- It's important to note that while this approach masks the data effectively, it retains the ability to decrypt it back to its original form if necessary, offering flexibility without compromising data privacy.
+- To address data privacy, we're employing Fernet symmetric encryption (from the cryptography library) within the data_processing.py script. Specifically, the ip and device_id fields are encrypted using the encrypt_data function. This method ensures that the original data becomes unreadable while retaining a consistent encrypted output for identical inputs. This determinism is crucial to identify duplicate records, even after masking.
 #### What will be your strategy for connecting and writing to Postgres?
-
-- The psycopg2 library is our tool of choice to connect to the PostgreSQL database. This library is popular in the Python community for its capabilities and robust performance when interfacing with PostgreSQL. After the data undergoes all necessary transformations, each record is diligently committed to the user_logins table in the database to ensure data integrity and consistency.
+- To interact with the PostgreSQL database, the psycopg2 library is employed in the database.py script. Connections are established using the connect_to_db function, and data is inserted using prepared statements in the insert_into_db function. The use of DictCursor simplifies parameter binding, and the commit ensures transaction durability. In case of any exceptions during insertion, they are caught and logged for troubleshooting.
 #### Where and how will your application run?
-
-- The application is designed to run on any machine with the necessary dependencies installed (Python, required libraries, and PostgreSQL). For easy deployment and scalability, one can also consider containerizing the application using Docker, enabling it to run in diverse environments consistently.
-
+- The application, as it stands, is a set of Python scripts designed to run on a local machine or server where Python, required libraries, and PostgreSQL are installed. While it's not currently containerized, this system can be easily wrapped in a Docker container to ensure consistent deployments across different environments.
 ## Additional Questions
-### Deploying in Production:
+#### Deploying in Production:
+- Containerization and Cloud Deployment: Though our current application isn't containerized, wrapping it in Docker can ensure reproducible deployments across various environments, be it local machines or cloud platforms like AWS ECS or Kubernetes.
 
-- Containerization and Cloud Deployment: Our application is container-ready, making use of Docker for containerization. This enables seamless deployments on cloud orchestration platforms like AWS ECS or Kubernetes, offering automated scaling and failover capabilities.
-- Configuration Management: To protect sensitive data, we use environment variables to handle configurations, including database connections and encryption secrets. This not only ensures security but promotes easier configuration updates without direct code modifications.
+- Configuration Management: Database and encryption configuration is hard coded for simplicity. However, in a production environment, these would ideally be stored in environment variables or secret management tools to ensure security and ease of configuration management.
 
-### Production-Readiness:
+#### Production-Readiness:
+- Robustness: Error handling mechanisms, such as exceptions within the insert_into_db function in the database.py script or the get_messages_from_queue function in the sqs_client.py script, ensure resilience against unforeseen issues.
+- Scaling Strategy:
+Parallel Processing: The architecture can handle parallel processing. By launching multiple instances or distributing the workload across different machines or containers, the application can concurrently process data from the SQS queue, leading to enhanced throughput.
+- Data Privacy and Recovery:
+PII Handling: PII, such as ip and device_id, is encrypted using Fernet symmetric encryption. This approach ensures the masked data's confidentiality while preserving the capability to decrypt it if required.
+#### Assumptions:
+- Data Integrity: The system assumes that SQS messages are in a consistent JSON format. If a string that isn't in valid JSON format is passed, the system provides a user-friendly error message.
 
-- Robustness: We've incorporated advanced error-handling mechanisms to address unexpected issues, ensuring the system runs smoothly. Every exception or irregularity is meticulously logged, aiding diagnostics and troubleshooting.
--Testing: A suite of unit tests has been added even though it wasn't a requirement for the assessment. This underscores our commitment to best practices in software engineering. Through these tests, we can ensure code integrity, and any future enhancements or changes won't introduce unforeseen issues.
-### Scaling Strategy:
-
-- Parallel Processing: The application's architecture allows for concurrent processing. By deploying multiple instances—either distributed across machines or within separate containers—we achieve rapid, parallel data processing from the SQS queue.
-### Data Privacy and Recovery:
-
-- PII Handling: The privacy of Personally Identifiable Information (PII) is paramount. We mask PII using Fernet symmetric encryption. This approach not only protects the data but also allows for potential data recovery, provided the encryption key is available.
-### Assumptions:
-
- - Data Integrity: We operate on the assumption that SQS messages adhere to the expected JSON format.
- - Database Infrastructure: A continuous, uninterrupted database connection is assumed, along with the presence of a correctly structured user_logins table.
-
+- Database Infrastructure: The system anticipates a consistent and uninterrupted connection to the database, along with the pre-existence of a user_logins table structured to accommodate the processed data.
 ## Additional Information
 #### Unit Tests:
 - Even though unit tests weren't explicitly mandated in the assignment, I deemed them necessary for a few reasons:
